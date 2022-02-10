@@ -1,30 +1,13 @@
 import boto3
-import time
 import psycopg2
 
-from enum import Enum
-from typing import Any, List
-from typing import Optional
-from typing import BinaryIO
-from urllib import response
+from typing import List
+from pydantic import BaseModel
 
 import uvicorn
-from fastapi import (
-    Cookie,
-    FastAPI,
-    Header,
-    status,
-    HTTPException,
-    BackgroundTasks,
-    Form,
-    File,
-    UploadFile,
-)
+from fastapi import FastAPI, UploadFile
+
 from fastapi.middleware.cors import CORSMiddleware
-
-from pydantic import BaseModel, Field
-
-from credentials import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
 S3_BUCKET_NAME = "test-photos-123"
 
@@ -37,7 +20,6 @@ class PhotoModel(BaseModel):
 
 
 app = FastAPI(debug=True)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,7 +31,30 @@ app.add_middleware(
 
 @app.get("/status")
 async def check_status():
-    return "Hello World"
+    return "Hello World!"
+
+
+@app.get("/photos", response_model=List[PhotoModel])
+async def get_all_photos():
+    # Connect to our database
+    conn = psycopg2.connect(
+        database="exampledb", user="docker", password="docker", host="0.0.0.0"
+    )
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM photo ORDER BY id DESC")
+    rows = cur.fetchall()
+
+    formatted_photos = []
+    for row in rows:
+        formatted_photos.append(
+            PhotoModel(
+                id=row[0], photo_name=row[1], photo_url=row[2], is_deleted=row[3]
+            )
+        )
+
+    cur.close()
+    conn.close()
+    return formatted_photos
 
 
 @app.post("/photos", status_code=201)
@@ -62,6 +67,7 @@ async def add_photo(file: UploadFile):
     s3 = boto3.resource("s3")
     bucket = s3.Bucket(S3_BUCKET_NAME)
     bucket.upload_fileobj(file.file, file.filename, ExtraArgs={"ACL": "public-read"})
+
     uploaded_file_url = f"https://{S3_BUCKET_NAME}.s3.amazonaws.com/{file.filename}"
 
     # Store URL in database
@@ -70,37 +76,11 @@ async def add_photo(file: UploadFile):
     )
     cur = conn.cursor()
     cur.execute(
-        f"INSERT INTO photo (photo_name, photo_url) VALUES ('{file.filename}', '{uploaded_file_url}')"
+        f"INSERT INTO photo (photo_name, photo_url) VALUES ('{file.filename}', '{uploaded_file_url}' )"
     )
     conn.commit()
     cur.close()
     conn.close()
-
-
-@app.get("/photos", response_model=List[PhotoModel])
-async def get_all_photos():
-    # Connect to existing database
-    conn = psycopg2.connect(
-        database="exampledb", user="docker", password="docker", host="0.0.0.0"
-    )
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM photo ORDER BY id DESC")
-    rows = cur.fetchall()
-
-    formatted_photos = []
-    for row in rows:
-        formatted_photos.append(
-            PhotoModel(
-                id=row[0],
-                photo_name=row[1],
-                photo_url=row[2],
-                is_deleted=False if row[3] == 0 else True,
-            )
-        )
-
-    cur.close()
-    conn.close()
-    return formatted_photos
 
 
 if __name__ == "__main__":
